@@ -18,6 +18,45 @@
 #   ocp ctx <TAB>     -> contexts (tooltip shows short cluster name)
 # =============================================================================================
 
+# ---- OpenShift API server config ---------------------------------
+# Env overrides (optional):
+#   OCP_API_SCHEME     -> e.g. "https"
+#   OCP_DOMAIN         -> e.g. "7wse.p1.openshiftapps.com"
+#   OCP_API_PORT       -> e.g. "6443" (set empty or "0" to omit)
+#   OCP_SERVER_REGEX   -> full regex override with a (?<short>...) group
+$script:OcpServer = @{
+    Scheme      = if ($env:OCP_API_SCHEME) { $env:OCP_API_SCHEME } else { 'https' }
+    Domain      = if ($env:OCP_DOMAIN)     { $env:OCP_DOMAIN }     else { '7wse.p1.openshiftapps.com' }
+    Port        = if ($env:OCP_API_PORT)   { try { [int]$env:OCP_API_PORT } catch { 6443 } } else { 6443 }
+    ServerRegex = $env:OCP_SERVER_REGEX  # optional override; must include (?<short>...) group
+}
+
+function Get-OcpApiServerUrl {
+    param([Parameter(Mandatory)][string]$Cluster)
+    $portPart = if ($script:OcpServer.Port -gt 0) { ":$($script:OcpServer.Port)" } else { "" }
+    return "{0}://api.{1}.{2}{3}" -f $script:OcpServer.Scheme, $Cluster, $script:OcpServer.Domain, $portPart
+}
+
+function Get-OcpServerRegex {
+    # If user supplied a full regex, prefer it (must expose (?<short>...))
+    if ($script:OcpServer.ServerRegex -and $script:OcpServer.ServerRegex.Trim().Length -gt 0) {
+        try {
+            return [regex]::new($script:OcpServer.ServerRegex, [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        } catch { }
+    }
+    # Default: https?://api.<short>.<domain>[:port]
+    $dom = [regex]::Escape($script:OcpServer.Domain)
+    $pat = "^(?<scheme>https?)://api\.(?<short>[^.]+)\.$dom(?::\d+)?$"
+    return [regex]::new($pat, [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+}
+
+function Get-OcpShortFromServer {
+    param([string]$Server)
+    if (-not $Server) { return $null }
+    $m = (Get-OcpServerRegex).Match($Server)
+    if ($m.Success) { return $m.Groups['short'].Value } else { return $null }
+}
+
 # ---------------------- State + Prompt ------------------------------------------
 $global:OcpState = [ordered]@{ Cluster = $null; Namespace = $null }
 
@@ -39,15 +78,15 @@ function global:prompt {
         Write-Host "(" -NoNewline
 
         if ($global:OcpState.Cluster) {
-            Write-Host $global:OcpState.Cluster -ForegroundColor Cyan -NoNewline
+            Write-Host $global:OcpState.Cluster -ForegroundColor DarkRed -NoNewline
         } else {
             Write-Host "-" -ForegroundColor DarkGray -NoNewline
         }
 
-        Write-Host " -- " -ForegroundColor DarkGray -NoNewline  # user preference
+        Write-Host ":" -ForegroundColor DarkGray -NoNewline  # user preference
 
         if ($global:OcpState.Namespace) {
-            Write-Host $global:OcpState.Namespace -ForegroundColor Yellow -NoNewline
+            Write-Host $global:OcpState.Namespace -ForegroundColor Cyan -NoNewline
         } else {
             Write-Host "-" -ForegroundColor DarkGray -NoNewline
         }
@@ -78,25 +117,29 @@ function Get-OcpKubeConfigPaths {
         $sep = if ($IsWindows) { ';' } else { ':' }
         return $env:KUBECONFIG -split [regex]::Escape($sep) | Where-Object { $_ -and (Test-Path $_) }
     }
-    $p = Join-Path $HOME ".kube\config"
+    $p = Join-Path (Join-Path $HOME ".kube") "config"
     if (Test-Path $p) { return ,$p } else { return @() }
 }
 
 function Refresh-OcpFromEnvironment {
     try {
-        $curNs = Get-OcpCurrentNamespace
-        if ($curNs) { Set-OcpNamespaceTag $curNs } else { Clear-OcpNamespaceTag }
+        if (Test-OcpLoggedIn) {
+            $curNs = Get-OcpCurrentNamespace
+            if ($curNs) { Set-OcpNamespaceTag $curNs } else { Clear-OcpNamespaceTag }
 
-        $server = (& oc whoami --show-server 2>$null)
-        if ($server -and ($server -match '^https://api\.([^.]+)\.7wse\.p1\.openshiftapps\.com(?::\d+)?$')) {
-            Set-OcpClusterTag $matches[1]
+            $server = (& oc whoami --show-server 2>$null)
+            $short  = Get-OcpShortFromServer $server
+            if ($short) { Set-OcpClusterTag $short } else { Clear-OcpClusterTag }
+
+            Update-OcpNsCache
+            Update-OcpPodsCache
+            Update-OcpRoutesCache
+            Update-OcpContextsCache
+            $script:OcpSessionTagsInitialized = $true
+        } else {
+            Clear-OcpClusterTag
+            Clear-OcpNamespaceTag
         }
-
-        Update-OcpNsCache
-        Update-OcpPodsCache
-        Update-OcpRoutesCache
-        Update-OcpContextsCache
-        $script:OcpSessionTagsInitialized = $true
     } catch { }
 }
 
@@ -232,15 +275,19 @@ $script:OcpSessionTagsInitialized = $false
 function Ensure-OcpSessionTags {
     if ($script:OcpSessionTagsInitialized) { return }
     try {
-        # Namespace (safe if not logged in)
-        $initNs = Get-OcpCurrentNamespace
-        if ($initNs) { Set-OcpNamespaceTag $initNs }
+        if (Test-OcpLoggedIn) {
+            # Namespace (safe when logged in)
+            $initNs = Get-OcpCurrentNamespace
+            if ($initNs) { Set-OcpNamespaceTag $initNs }
 
-        # Cluster from server URL, e.g., https://api.rm3.7wse.p1.openshiftapps.com:6443 -> rm3
-        $server = (& oc whoami --show-server 2>$null)
-        if ($server -and ($server -match '^https://api\.([^.]+)\.7wse\.p1\.openshiftapps\.com(?::\d+)?$')) {
-            $inferred = $matches[1]
+            # Cluster short from server
+            $server   = (& oc whoami --show-server 2>$null)
+            $inferred = Get-OcpShortFromServer $server
             if ($inferred) { Set-OcpClusterTag $inferred }
+        } else {
+            # Not logged in -> no prompt tags
+            Clear-OcpClusterTag
+            Clear-OcpNamespaceTag
         }
     } catch { }
     $script:OcpSessionTagsInitialized = $true
@@ -250,6 +297,13 @@ function Ensure-OcpSessionTags {
 }
 
 # ---------------------- Helpers: current namespace & warmers ---------------------
+function Test-OcpLoggedIn {
+    try {
+        & oc whoami 1>$null 2>$null
+        return ($LASTEXITCODE -eq 0)
+    } catch { return $false }
+}
+
 function Get-OcpCurrentNamespace {
     $ns = (& oc project -q 2>$null)
     if ($ns -and $ns.Trim().Length -gt 0) { return $ns.Trim() }
@@ -317,10 +371,8 @@ function Update-OcpContextsCache {
             $name = $ctx.name
             $clName = $ctx.context.cluster
             $server = if ($clusterByName.ContainsKey($clName)) { $clusterByName[$clName] } else { $null }
-            $short = $null
-            if ($server -and ($server -match '^https://api\.([^.]+)\.7wse\.p1\.openshiftapps\.com(?::\d+)?$')) {
-                $short = $matches[1]
-            }
+            $short = Get-OcpShortFromServer $server
+
             $list += [pscustomobject]@{
                 Name        = $name
                 ClusterName = $clName
@@ -362,8 +414,9 @@ function Get-OcpClustersCached {
     $cfg = $cfgJson | ConvertFrom-Json
     $vals = @()
     foreach ($c in $cfg.clusters) {
-        $srv = $c.cluster.server
-        if ($srv -match '^https://api\.([^.]+)\.7wse\.p1\.openshiftapps\.com(?::\d+)?$') { $vals += $matches[1] }
+        $srv   = $c.cluster.server
+        $short = Get-OcpShortFromServer $srv
+        if ($short) { $vals += $short }
     }
     $vals = $vals | Sort-Object -Unique
     $script:Cache.Clusters = @{ Data=$vals; At=Get-Date; Ttl=$script:Cache.Clusters.Ttl }
@@ -514,14 +567,16 @@ Register-OcpCommand -Name 'ctx' -Help 'List or switch kube contexts. Usage: ocp 
     if ($LASTEXITCODE -ne 0) { Write-Warning "Failed to switch context to '$($match.Name)'."; return }
 
     # Update prompt tags from the selected context:
-    $short = $match.Short
-    if (-not $short -and $match.Server -and ($match.Server -match '^https://api\.([^.]+)\.7wse\.p1\.openshiftapps\.com(?::\d+)?$')) {
-        $short = $matches[1]
-    }
-    if ($short) { Set-OcpClusterTag $short }
+    if (Test-OcpLoggedIn) {
+        $short = if ($match.Short) { $match.Short } else { Get-OcpShortFromServer $match.Server }
+        if ($short) { Set-OcpClusterTag $short } else { Clear-OcpClusterTag }
 
-    $curNs = Get-OcpCurrentNamespace
-    if ($curNs) { Set-OcpNamespaceTag $curNs } else { Clear-OcpNamespaceTag }
+        $curNs = Get-OcpCurrentNamespace
+        if ($curNs) { Set-OcpNamespaceTag $curNs } else { Clear-OcpNamespaceTag }
+    } else {
+        Clear-OcpClusterTag
+        Clear-OcpNamespaceTag
+    }
 
     Update-OcpNsCache
     Update-OcpPodsCache
@@ -593,7 +648,7 @@ function ocp {
         $authArgs    = @("--username=$Username")
     }
 
-    $server = "https://api.$Cluster.7wse.p1.openshiftapps.com:6443"
+    $server = Get-OcpApiServerUrl $Cluster
     Write-Host "Logging in to $server as $displayUser ..."
 
     $ocArgs = @('login', "--server=$server") + $authArgs

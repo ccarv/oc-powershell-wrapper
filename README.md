@@ -1,10 +1,14 @@
+Here’s an updated **README.md** you can drop into the repo.
+
+---
+
 # ocp.ps1 — PowerShell OpenShift CLI Helper
 
-A lightweight PowerShell wrapper around `oc` that adds smart login, a context-aware prompt, fast auto-completions (clusters/namespaces/pods/routes/contexts), and convenient subcommands. 
+A lightweight PowerShell wrapper around `oc` that adds smart login, a context-aware prompt, fast auto-completions (clusters/namespaces/pods/routes/contexts), and convenient subcommands. It loads in your profile but **doesn’t run `oc` until you actually use `ocp`**. The prompt only updates **when you’re logged in**.
 
 > Prompt example (cluster short name + namespace):
 >
-> `(rm3 -- payments) PS C:\src\my-service>`
+> `(rm3 : payments) PS C:\src\my-service>`
 
 ---
 
@@ -13,14 +17,11 @@ A lightweight PowerShell wrapper around `oc` that adds smart login, a context-aw
 * [Features](#features)
 * [Prerequisites](#prerequisites)
 * [Installation](#installation)
-* [Usage](#usage)
-
-  * [Login](#login)
-  * [Prompt](#prompt)
-  * [Subcommands](#subcommands)
-  * [Auto-completion](#auto-completion)
-  * [Context & Namespace sync (outside `ocp`)](#context--namespace-sync-outside-ocp)
 * [Configuration](#configuration)
+* [Commands](#commands)
+* [Usage Examples](#usage-examples)
+* [Auto-completion](#auto-completion)
+* [Context & Namespace Sync (outside `ocp`)](#context--namespace-sync-outside-ocp)
 * [Performance Notes](#performance-notes)
 * [Troubleshooting](#troubleshooting)
 * [Contributing](#contributing)
@@ -32,31 +33,28 @@ A lightweight PowerShell wrapper around `oc` that adds smart login, a context-aw
 
 * **Zero-cost startup:** No `oc` calls at profile load; everything initializes the first time you use `ocp`.
 * **Login convenience:**
-  `ocp <cluster> [usernameOrToken]` — detects tokens that start with `sha256~` and uses `--token` automatically; otherwise uses `--username`.
-* **Prompt tags:** Shows **cluster short name** and **namespace** in your PowerShell prompt and updates on login, `ocp ns`, and context switches.
-* **Context switching:** `ocp ctx` lists/switches contexts; output is sorted by short cluster name first:
-
-  ```
-  *  [rm3]  my-context-name
-     [qa1]  another-context
-  ```
+  `ocp <cluster> [usernameOrToken]` — tokens starting with `sha256~` are auto-detected and passed via `--token`; otherwise `--username` is used.
+* **Prompt tags (auth-gated):** Shows **cluster short name** and **namespace** in the prompt and updates only when logged in.
+* **Context switching:** `ocp ctx` lists/switches contexts (sorted by short cluster name first).
 * **Auto-completion with caching:** Tab-complete clusters, namespaces, pods, routes, and contexts with TTL-based caches.
-* **Helpful subcommands:** `logout`, `who`, `ns`, `logs`, `tail`, `route`, `ctx`, `refresh`, `help`.
 * **External change detection (lazy):** Detects namespace/context changes made **outside** `ocp` (e.g., `oc project foo`, `oc -n bar get pods`) via:
 
   * A **FileSystemWatcher** on kubeconfig(s) for persisted changes.
   * A **PSReadLine history hook** for ephemeral `-n/--namespace` and `oc project` changes.
-    Both start only after your first use of `ocp` and tear down on `ocp logout`.
+    Both start only after your first `ocp` use and stop on `ocp logout`.
+* **Configurable server/regex:** Centralized OpenShift API URL building and “short cluster” extraction, configurable via **env vars**.
 
 ---
 
 ## Prerequisites
 
 * **PowerShell** 7.x (Core) or Windows PowerShell 5.1
-  (Works cross-platform on Windows/macOS/Linux with PS7+.)
-* **OpenShift CLI** (`oc`) installed and on `PATH`.
-* **PSReadLine** module (included by default in modern PowerShell) — used for the history hook.
-* A valid **kubeconfig** (via `$KUBECONFIG` or `~/.kube/config`).
+* **OpenShift CLI** (`oc`) installed and on `PATH`
+* **PSReadLine** module (bundled with modern PowerShell)
+* A valid **kubeconfig** via:
+
+  * `$KUBECONFIG` (Windows uses `;`, macOS/Linux uses `:`), or
+  * default path: `~/.kube/config` *(portable handling for all OSes)*
 
 ---
 
@@ -91,143 +89,148 @@ A lightweight PowerShell wrapper around `oc` that adds smart login, a context-aw
      . "$HOME/.config/powershell/ocp.ps1"  # macOS/Linux
      ```
 
-3. (Windows only) If your Execution Policy blocks local scripts:
+3. *(Windows only)* If Execution Policy blocks local scripts:
 
    ```powershell
    Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
    ```
 
-That’s it. Open a new PowerShell session (or re-dot-source your profile) and run `ocp`.
-
----
-
-## Usage
-
-### Login
-
-```powershell
-# Username-based login (username inferred from $env:USERNAME if omitted)
-ocp rm3                # uses --username=$env:USERNAME
-ocp rm3 alice          # uses --username=alice
-
-# Token-based login (auto-detected when it starts with 'sha256~')
-ocp rm3 sha256~<token>
-```
-
-`ocp` logs into `https://api.<cluster>.7wse.p1.openshiftapps.com:6443`, sets your prompt tags, and warms caches.
-
-### Prompt
-
-The prompt shows `( <cluster-short> -- <namespace> )` before the usual `PS <path>`:
-
-```
-(rm3 -- dev) PS C:\src\svc>
-```
-
-It updates on:
-
-* successful `ocp` login,
-* `ocp ns <name>`,
-* `ocp ctx <name-or-short>`,
-* and external changes (see below).
-
-### Subcommands
-
-```powershell
-ocp help
-```
-
-* `ocp logout` — `oc logout` + clears prompt tags and stops external sync.
-* `ocp who` — shows current user, server, and namespace.
-* `ocp ns <namespace>` — switch project/namespace (updates prompt).
-* `ocp logs <pod> [-- extra oc logs args]` — `oc logs` once.
-* `ocp tail <pod>` — `oc logs -f`.
-* `ocp route <route-name>` — opens the route in your default browser.
-* `ocp ctx [name|short]` — list or switch contexts (sorted by short name first).
-* `ocp refresh [ns|pods|routes|contexts|all]` — manually refresh caches.
-
-**Examples**
-
-```powershell
-ocp ns payments
-ocp ctx                 # lists contexts
-ocp ctx rm3             # switch by short name
-ocp logs api-7f6c9 -c app --since=10m
-ocp tail worker-0
-ocp route web-frontend
-ocp refresh all
-ocp logout
-```
-
-### Auto-completion
-
-* `ocp <TAB>` → clusters (from kubeconfig server URLs)
-* `ocp ns <TAB>` → namespaces
-* `ocp logs|tail <TAB>` → pods in the current namespace
-* `ocp route <TAB>` → routes in the current namespace
-* `ocp ctx <TAB>` → contexts (tooltip shows short cluster)
-
-Caching uses sensible TTLs to keep completions fast without stale results.
-
-### Context & Namespace sync (outside `ocp`)
-
-The script detects changes made directly with `oc` or other tools:
-
-* **Persisted changes** (kubeconfig edits): file watcher triggers a refresh.
-* **Ephemeral changes** (`oc project foo`, `oc -n bar get pods`, `--namespace=baz`): a PSReadLine hook marks a refresh and the prompt updates immediately when it renders next.
-
-Both mechanisms are **lazy-started** the first time you use `ocp`, and **stopped** on `ocp logout`.
+Open a new PowerShell session (or re-dot-source your profile) and run `ocp`.
 
 ---
 
 ## Configuration
 
-The external sync has simple feature toggles you can flip **after** the script loads:
+### Server & regex (env vars)
+
+You can change how the server URL is built and how the short cluster name is parsed **without editing the file**:
+
+| Env var            | Example value                                                  | Purpose                                                                        |
+| ------------------ | -------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `OCP_API_SCHEME`   | `https`                                                        | Protocol for the API URL                                                       |
+| `OCP_DOMAIN`       | `7wse.p1.openshiftapps.com`                                    | Domain appended after `api.<cluster>.`                                         |
+| `OCP_API_PORT`     | `6443` (or `0` to omit)                                        | Port for the API URL                                                           |
+| `OCP_SERVER_REGEX` | `^https?://api\.(?<short>[^.]+)\.corp\.example\.com(?::\d+)?$` | Override the default detection regex; **must** include a `(?<short>...)` group |
+
+Example (session-scoped):
 
 ```powershell
-# Disable watcher or history hook for this session
-$script:OcpSync.UseFileWatcher  = $false
-$script:OcpSync.UseReadLineHook = $false
+$env:OCP_DOMAIN       = 'corp.example.com'
+$env:OCP_API_PORT     = '443'
+$env:OCP_SERVER_REGEX = '^https?://api\.(?<short>[^.]+)\.corp\.example\.com(?::\d+)?$'
 ```
 
-(These are script-scoped values defined by `ocp.ps1`. Set them in your profile *after* dot-sourcing the script if you want different defaults.)
+### Sync feature toggles (per session)
+
+After dot-sourcing the script, you can toggle these:
+
+```powershell
+$script:OcpSync.UseFileWatcher  = $true   # or $false
+$script:OcpSync.UseReadLineHook = $true   # or $false
+```
+
+---
+
+## Commands
+
+| Command     | Syntax                                          | Description                                                                                                             |
+| ----------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| **login**   | `ocp <cluster> [usernameOrToken]`               | Logs into `https://api.<cluster>.<domain>:<port>`. Detects `sha256~` tokens vs username. Updates prompt & warms caches. |
+| **logout**  | `ocp logout`                                    | Runs `oc logout`, clears prompt tags, and stops external sync.                                                          |
+| **who**     | `ocp who`                                       | Shows current user, server, and namespace.                                                                              |
+| **ns**      | `ocp ns <namespace>`                            | Switches project/namespace. Updates prompt and refreshes pod/route caches.                                              |
+| **logs**    | `ocp logs <pod> [-- extra oc logs args]`        | Runs `oc logs` in the current namespace (with your extra args).                                                         |
+| **tail**    | `ocp tail <pod>`                                | Runs `oc logs -f` (follow) in the current namespace.                                                                    |
+| **route**   | `ocp route <route-name>`                        | Opens the route URL in the default browser (https if TLS is set).                                                       |
+| **ctx**     | `ocp ctx [name \| short]`                       | Lists contexts (sorted by short first) or switches to the selected context. Updates prompt if logged in.                |
+| **refresh** | `ocp refresh [ns\|pods\|routes\|contexts\|all]` | Manually refreshes one or more caches.                                                                                  |
+| **help**    | `ocp help`                                      | Shows usage and registered commands.                                                                                    |
+
+---
+
+## Usage Examples
+
+```powershell
+# Login
+ocp rm3                 # uses --username=$env:USERNAME
+ocp rm3 alice           # explicit username
+ocp rm3 sha256~ABC...   # token-based login
+
+# Quick info
+ocp who
+
+# Namespace / context
+ocp ns payments
+ocp ctx                 # list contexts
+ocp ctx rm3             # switch by short name
+
+# Logs & routes
+ocp logs api-7f6c9 -c app --since=10m
+ocp tail worker-0
+ocp route web-frontend
+
+# Housekeeping
+ocp refresh all
+ocp logout
+```
+
+---
+
+## Auto-completion
+
+* `ocp <TAB>` → clusters (from kubeconfig servers)
+* `ocp ns <TAB>` → namespaces
+* `ocp logs|tail <TAB>` → pods in the current namespace
+* `ocp route <TAB>` → routes in the current namespace
+* `ocp ctx <TAB>` → contexts (tooltip shows short cluster name)
+
+Caching keeps completions responsive while avoiding excessive `oc` calls.
+
+---
+
+## Context & Namespace Sync (outside `ocp`)
+
+The script detects changes made directly with `oc` or other tools:
+
+* **Persisted changes** (kubeconfig edits): a file watcher marks a refresh.
+* **Ephemeral changes** (`oc project foo`, `oc -n bar get pods`, `--namespace=baz`): a PSReadLine hook marks a refresh.
+
+The actual read happens at the **next prompt render** (post-command), ensuring accurate tags. If you’re **not logged in**, the prompt tags remain **cleared**.
 
 ---
 
 ## Performance Notes
 
 * **Lazy initialization:** No `oc` calls at shell startup.
-* **Debounced refreshes:** File watcher changes are debounced (250ms) and applied at the next prompt render to avoid reading kubeconfig mid-write.
-* **TTL-based caches:** Namespaces / pods / routes / contexts are cached per TTL and current namespace, improving tab completion speed.
+* **Debounced refreshes:** Kubeconfig changes are debounced (\~250ms) and applied at the next prompt.
+* **TTL-based caches:** Namespaces / pods / routes / contexts cache per sensible TTLs.
 
 ---
 
 ## Troubleshooting
 
-* **Prompt doesn’t show cluster/namespace:**
-  Use `ocp` at least once (e.g., `ocp who`) to trigger lazy init. Then try `ocp refresh all`.
+* **Prompt shows nothing for cluster/namespace:**
+  You’re likely not authenticated. Run `oc login …` or `ocp <cluster> …`.
+  (Typing `ocp` alone will not set tags unless logged in.)
 
 * **Namespace changes don’t reflect immediately:**
-  Ensure PSReadLine is loaded (`Get-Module PSReadLine`). The prompt updates right after the command completes, when the prompt renders.
+  Ensure PSReadLine is loaded (`Get-Module PSReadLine`). The prompt updates right after the command completes.
 
-* **Using multiple kubeconfigs:**
-  Set `$KUBECONFIG` (Windows uses `;`, macOS/Linux uses `:` as the separator). The watcher handles all listed files.
+* **Multiple kubeconfigs:**
+  Set `$KUBECONFIG` (`;` on Windows, `:` on macOS/Linux). The watcher follows all listed files.
 
-* **`oc` not on PATH or missing kubeconfig:**
-  `ocp` relies on `oc` and your kubeconfig. Confirm `oc version` and that either `$KUBECONFIG` is set or `~/.kube/config` exists.
-
-* **Execution policy blocks loading:**
-  On Windows: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+* **Execution policy blocks loading (Windows):**
+  `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 
 ---
 
 ## Contributing
 
-Issues and PRs are welcome! Ideas that would be especially helpful:
+PRs and issues welcome! Good candidates:
 
 * Additional resource helpers (`ocp get`, `ocp describe`) with completion.
 * Async cache refresh (opt-in).
-* Per-machine environment toggles for sync features.
+* More env toggles for per-machine behavior.
 
 ---
 
