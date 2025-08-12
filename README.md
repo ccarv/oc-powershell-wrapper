@@ -2,9 +2,7 @@
 
 A lightweight PowerShell wrapper around `oc` that adds smart login, a context-aware prompt, fast auto-completions (clusters/namespaces/pods/routes/contexts), and convenient subcommands. It loads in your profile but **doesn’t run `oc` until you actually use `ocp`**. The prompt only updates **when you’re logged in**.
 
-> Prompt example (cluster short name + namespace):
->
-> `(rm3 : payments) PS C:\src\my-service>`
+![Example](assets/example.gif)
 
 ---
 
