@@ -1,8 +1,4 @@
-Here’s an updated **README.md** you can drop into the repo.
-
----
-
-# ocp.ps1 — PowerShell OpenShift CLI Helper
+# ocp.ps1 — OC PowerShell Wrapper
 
 A lightweight PowerShell wrapper around `oc` that adds smart login, a context-aware prompt, fast auto-completions (clusters/namespaces/pods/routes/contexts), and convenient subcommands. It loads in your profile but **doesn’t run `oc` until you actually use `ocp`**. The prompt only updates **when you’re logged in**.
 
@@ -17,6 +13,7 @@ A lightweight PowerShell wrapper around `oc` that adds smart login, a context-aw
 * [Features](#features)
 * [Prerequisites](#prerequisites)
 * [Installation](#installation)
+* [Setting up (API server URL)](#setting-up-api-server-url)
 * [Configuration](#configuration)
 * [Commands](#commands)
 * [Usage Examples](#usage-examples)
@@ -99,6 +96,46 @@ Open a new PowerShell session (or re-dot-source your profile) and run `ocp`.
 
 ---
 
+## Setting up (API server URL)
+
+`ocp` constructs the API server URL from simple building blocks:
+
+```
+{scheme}://api.{cluster}.{domain}{:port?}
+```
+
+* **scheme**: usually `https`
+* **cluster**: the short cluster you pass to `ocp` (e.g., `rm3`)
+* **domain**: your organization’s OpenShift domain (default shown below)
+* **port**: typically `6443`; set to `0` (or empty) to omit
+
+| Setting | Default                     | Example override                               |
+| ------- | --------------------------- | ---------------------------------------------- |
+| Scheme  | `https`                     | `OCP_API_SCHEME=https`                         |
+| Domain  | `7wse.p1.openshiftapps.com` | `OCP_DOMAIN=corp.example.com`                  |
+| Port    | `6443`                      | `OCP_API_PORT=443` or `OCP_API_PORT=0` to omit |
+
+**Examples**
+
+* Default domain/port, cluster `rm3` →
+  `https://api.rm3.7wse.p1.openshiftapps.com:6443`
+* Custom domain, omit port, cluster `dev` →
+  set `OCP_DOMAIN=corp.example.com`, `OCP_API_PORT=0` →
+  `https://api.dev.corp.example.com`
+
+**How the “short cluster” is detected**
+
+When reading the current server (e.g., from kubeconfig), `ocp` extracts the short cluster using a regex. You can override it with `OCP_SERVER_REGEX`, which **must** contain a named group `(?<short>...)`.
+
+* Default pattern (conceptual):
+  `^https?://api\.(?<short>[^.]+)\.<domain>(?::\d+)?$`
+* Custom example:
+  `OCP_SERVER_REGEX=^https?://api\.(?<short>[a-z0-9-]+)\.corp\.example\.com(?::\d+)?$`
+
+> Tip: after logging in, run `oc whoami --show-server` to verify the server URL matches your expectations.
+
+---
+
 ## Configuration
 
 ### Server & regex (env vars)
@@ -116,7 +153,7 @@ Example (session-scoped):
 
 ```powershell
 $env:OCP_DOMAIN       = 'corp.example.com'
-$env:OCP_API_PORT     = '443'
+$env:OCP_API_PORT     = '443'     # or '0' to omit the port
 $env:OCP_SERVER_REGEX = '^https?://api\.(?<short>[^.]+)\.corp\.example\.com(?::\d+)?$'
 ```
 
