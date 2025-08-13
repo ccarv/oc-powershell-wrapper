@@ -240,4 +240,4 @@ PRs and issues welcome! Good candidates:
 
 ## License
 
-MIT (or your preferred license). Add a `LICENSE` file in the repo root.
+[MIT License](LICENSE)
