@@ -1,8 +1,9 @@
-# ocp.ps1 — OC PowerShell Wrapper
+# ocp.ps1 — PowerShell OpenShift CLI Helper
 
 A lightweight PowerShell wrapper around `oc` that adds smart login, a context-aware prompt, fast auto-completions (clusters/namespaces/pods/routes/contexts), and convenient subcommands. It loads in your profile but **doesn’t run `oc` until you actually use `ocp`**. The prompt only updates **when you’re logged in**.
 
-![Example](assets/example.gif)
+> Prompt example (cluster short name + namespace):
+> `(uswest8 : payments) PS C:\src\my-service>`
 
 ---
 
@@ -11,7 +12,6 @@ A lightweight PowerShell wrapper around `oc` that adds smart login, a context-aw
 * [Features](#features)
 * [Prerequisites](#prerequisites)
 * [Installation](#installation)
-* [Setting up (API server URL)](#setting-up-api-server-url)
 * [Configuration](#configuration)
 * [Commands](#commands)
 * [Usage Examples](#usage-examples)
@@ -26,18 +26,14 @@ A lightweight PowerShell wrapper around `oc` that adds smart login, a context-aw
 
 ## Features
 
-* **Zero-cost startup:** No `oc` calls at profile load; everything initializes the first time you use `ocp`.
 * **Login convenience:**
   `ocp <cluster> [usernameOrToken]` — tokens starting with `sha256~` are auto-detected and passed via `--token`; otherwise `--username` is used.
 * **Prompt tags (auth-gated):** Shows **cluster short name** and **namespace** in the prompt and updates only when logged in.
 * **Context switching:** `ocp ctx` lists/switches contexts (sorted by short cluster name first).
 * **Auto-completion with caching:** Tab-complete clusters, namespaces, pods, routes, and contexts with TTL-based caches.
-* **External change detection (lazy):** Detects namespace/context changes made **outside** `ocp` (e.g., `oc project foo`, `oc -n bar get pods`) via:
-
-  * A **FileSystemWatcher** on kubeconfig(s) for persisted changes.
-  * A **PSReadLine history hook** for ephemeral `-n/--namespace` and `oc project` changes.
-    Both start only after your first `ocp` use and stop on `ocp logout`.
-* **Configurable server/regex:** Centralized OpenShift API URL building and “short cluster” extraction, configurable via **env vars**.
+* **Namespace/context aware:** Detects namespace/context changes made **outside** `ocp` (e.g., `oc project foo`, `oc -n bar get pods`) via:
+  * Actively monitors on kubeconfig(s) for persisted changes.
+  * Watches for ephemeral `-n/--namespace` and `oc project` changes.
 
 ---
 
@@ -94,102 +90,73 @@ Open a new PowerShell session (or re-dot-source your profile) and run `ocp`.
 
 ---
 
-## Setting up (API server URL)
-
-`ocp` constructs the API server URL from simple building blocks:
-
-```
-{scheme}://api.{cluster}.{domain}{:port?}
-```
-
-* **scheme**: usually `https`
-* **cluster**: the short cluster you pass to `ocp` (e.g., `rm3`)
-* **domain**: your organization’s OpenShift domain (default shown below)
-* **port**: typically `6443`; set to `0` (or empty) to omit
-
-| Setting | Default                     | Example override                               |
-| ------- | --------------------------- | ---------------------------------------------- |
-| Scheme  | `https`                     | `OCP_API_SCHEME=https`                         |
-| Domain  | `7wse.p1.openshiftapps.com` | `OCP_DOMAIN=corp.example.com`                  |
-| Port    | `6443`                      | `OCP_API_PORT=443` or `OCP_API_PORT=0` to omit |
-
-**Examples**
-
-* Default domain/port, cluster `rm3` →
-  `https://api.rm3.7wse.p1.openshiftapps.com:6443`
-* Custom domain, omit port, cluster `dev` →
-  set `OCP_DOMAIN=corp.example.com`, `OCP_API_PORT=0` →
-  `https://api.dev.corp.example.com`
-
-**How the “short cluster” is detected**
-
-When reading the current server (e.g., from kubeconfig), `ocp` extracts the short cluster using a regex. You can override it with `OCP_SERVER_REGEX`, which **must** contain a named group `(?<short>...)`.
-
-* Default pattern (conceptual):
-  `^https?://api\.(?<short>[^.]+)\.<domain>(?::\d+)?$`
-* Custom example:
-  `OCP_SERVER_REGEX=^https?://api\.(?<short>[a-z0-9-]+)\.corp\.example\.com(?::\d+)?$`
-
-> Tip: after logging in, run `oc whoami --show-server` to verify the server URL matches your expectations.
+Absolutely—here’s a **drop-in replacement** for the **Configuration** section with the **Required/Optional** settings presented as a table.
 
 ---
 
 ## Configuration
 
-### Server & regex (env vars)
+Only **one** variable is required: your organization’s **domain suffix**.
 
-You can change how the server URL is built and how the short cluster name is parsed **without editing the file**:
+| Variable            | Required | Default     | Example value                                                  | Purpose                                                                                                  |
+| ------------------- | :------: | ----------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `OCP_DOMAIN_SUFFIX` |  **Yes** | —           | `corp.example.com`                                             | Domain suffix used to build API URLs and to detect the **short cluster** from `oc whoami --show-server`. |
+| `OCP_API_SCHEME`    |    No    | `https`     | `https`                                                        | Protocol for API URL construction.                                                                       |
+| `OCP_API_PORT`      |    No    | `6443`      | `6443` (or `0` to omit)                                        | Port for API URL; set to `0` (or empty) to omit `:port`.                                                 |
+| `OCP_SERVER_REGEX`  |    No    | *(derived)* | `^https?://api\.(?<short>[^.]+)\.corp\.example\.com(?::\d+)?$` | Full override for server detection; **must** include a named group `(?<short>...)`.                      |
 
-| Env var            | Example value                                                  | Purpose                                                                        |
-| ------------------ | -------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `OCP_API_SCHEME`   | `https`                                                        | Protocol for the API URL                                                       |
-| `OCP_DOMAIN`       | `7wse.p1.openshiftapps.com`                                    | Domain appended after `api.<cluster>.`                                         |
-| `OCP_API_PORT`     | `6443` (or `0` to omit)                                        | Port for the API URL                                                           |
-| `OCP_SERVER_REGEX` | `^https?://api\.(?<short>[^.]+)\.corp\.example\.com(?::\d+)?$` | Override the default detection regex; **must** include a `(?<short>...)` group |
-
-Example (session-scoped):
+**Set for current session:**
 
 ```powershell
-$env:OCP_DOMAIN       = 'corp.example.com'
-$env:OCP_API_PORT     = '443'     # or '0' to omit the port
-$env:OCP_SERVER_REGEX = '^https?://api\.(?<short>[^.]+)\.corp\.example\.com(?::\d+)?$'
+$env:OCP_DOMAIN_SUFFIX = 'corp.example.com'   # REQUIRED
+# Optional:
+$env:OCP_API_SCHEME    = 'https'
+$env:OCP_API_PORT      = '6443'               # or '0' to omit the port
+$env:OCP_SERVER_REGEX  = '^https?://api\.(?<short>[^.]+)\.corp\.example\.com(?::\d+)?$'
 ```
 
-### Sync feature toggles (per session)
+**URL construction**
 
-After dot-sourcing the script, you can toggle these:
-
-```powershell
-$script:OcpSync.UseFileWatcher  = $true   # or $false
-$script:OcpSync.UseReadLineHook = $true   # or $false
 ```
+{scheme}://api.{cluster}.{domainSuffix}{:port?}
+```
+
+Examples with **cluster** `uswest8` and **domain suffix** `corp.example.com`:
+
+* Default port `6443` → `https://api.uswest8.corp.example.com:6443`
+* Omit port (`OCP_API_PORT=0`) → `https://api.uswest8.corp.example.com`
+
+> If `OCP_DOMAIN_SUFFIX` is not set, `ocp` will error and refuse to run until you set it.
 
 ---
 
 ## Commands
 
-| Command     | Syntax                                          | Description                                                                                                             |
-| ----------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| **login**   | `ocp <cluster> [usernameOrToken]`               | Logs into `https://api.<cluster>.<domain>:<port>`. Detects `sha256~` tokens vs username. Updates prompt & warms caches. |
-| **logout**  | `ocp logout`                                    | Runs `oc logout`, clears prompt tags, and stops external sync.                                                          |
-| **who**     | `ocp who`                                       | Shows current user, server, and namespace.                                                                              |
-| **ns**      | `ocp ns <namespace>`                            | Switches project/namespace. Updates prompt and refreshes pod/route caches.                                              |
-| **logs**    | `ocp logs <pod> [-- extra oc logs args]`        | Runs `oc logs` in the current namespace (with your extra args).                                                         |
-| **tail**    | `ocp tail <pod>`                                | Runs `oc logs -f` (follow) in the current namespace.                                                                    |
-| **route**   | `ocp route <route-name>`                        | Opens the route URL in the default browser (https if TLS is set).                                                       |
-| **ctx**     | `ocp ctx [name \| short]`                       | Lists contexts (sorted by short first) or switches to the selected context. Updates prompt if logged in.                |
-| **refresh** | `ocp refresh [ns\|pods\|routes\|contexts\|all]` | Manually refreshes one or more caches.                                                                                  |
-| **help**    | `ocp help`                                      | Shows usage and registered commands.                                                                                    |
+| Command     | Syntax                                          | Description                                                                                                                   |
+| ----------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| **login**   | `ocp <cluster> [usernameOrToken]`               | Logs into `https://api.<cluster>.<domainSuffix>:<port>`. Detects `sha256~` tokens vs username. Updates prompt & warms caches. |
+| **logout**  | `ocp logout`                                    | Runs `oc logout`, clears prompt tags, and stops external sync.                                                                |
+| **who**     | `ocp who`                                       | Shows current user, server, and namespace.                                                                                    |
+| **ns**      | `ocp ns <namespace>`                            | Switches project/namespace. Updates prompt and refreshes pod/route caches.                                                    |
+| **logs**    | `ocp logs <pod> [-- extra oc logs args]`        | Runs `oc logs` in the current namespace (with your extra args).                                                               |
+| **tail**    | `ocp tail <pod>`                                | Runs `oc logs -f` (follow) in the current namespace.                                                                          |
+| **route**   | `ocp route <route-name>`                        | Opens the route URL in the default browser (https if TLS is set).                                                             |
+| **ctx**     | `ocp ctx [name \| short]`                       | Lists contexts (sorted by short first) or switches to the selected context. Updates prompt if logged in.                      |
+| **refresh** | `ocp refresh [ns\|pods\|routes\|contexts\|all]` | Manually refreshes one or more caches.                                                                                        |
+| **help**    | `ocp help`                                      | Shows usage and registered commands.                                                                                          |
 
 ---
 
 ## Usage Examples
 
 ```powershell
-# Login
-ocp rm3                 # uses --username=$env:USERNAME
-ocp rm3 alice           # explicit username
-ocp rm3 sha256~ABC...   # token-based login
+# REQUIRED: set your domain suffix first
+$env:OCP_DOMAIN_SUFFIX = 'corp.example.com'
+
+# Login (cluster 'uswest8')
+ocp uswest8                 # uses --username=$env:USERNAME
+ocp uswest8 alice           # explicit username
+ocp uswest8 sha256~ABC...   # token-based login
 
 # Quick info
 ocp who
@@ -197,7 +164,7 @@ ocp who
 # Namespace / context
 ocp ns payments
 ocp ctx                 # list contexts
-ocp ctx rm3             # switch by short name
+ocp ctx uswest8         # switch by short name if the context maps to that server
 
 # Logs & routes
 ocp logs api-7f6c9 -c app --since=10m
@@ -244,8 +211,15 @@ The actual read happens at the **next prompt render** (post-command), ensuring a
 
 ## Troubleshooting
 
+* **“OCP\_DOMAIN\_SUFFIX is not set” error:**
+  Set it and re-run:
+
+  ```powershell
+  $env:OCP_DOMAIN_SUFFIX = 'corp.example.com'
+  ```
+
 * **Prompt shows nothing for cluster/namespace:**
-  You’re likely not authenticated. Run `oc login …` or `ocp <cluster> …`.
+  You’re likely not authenticated. Run `oc login …` or `ocp uswest8 …`.
   (Typing `ocp` alone will not set tags unless logged in.)
 
 * **Namespace changes don’t reflect immediately:**
@@ -255,7 +229,7 @@ The actual read happens at the **next prompt render** (post-command), ensuring a
   Set `$KUBECONFIG` (`;` on Windows, `:` on macOS/Linux). The watcher follows all listed files.
 
 * **Execution policy blocks loading (Windows):**
-  `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+  `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, or `Unblock-File` on the downloaded files.
 
 ---
 
@@ -271,4 +245,4 @@ PRs and issues welcome! Good candidates:
 
 ## License
 
-MIT License
+MIT (or your preferred license). Add a `LICENSE` file in the repo root.

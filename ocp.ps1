@@ -18,34 +18,47 @@
 #   ocp ctx <TAB>     -> contexts (tooltip shows short cluster name)
 # =============================================================================================
 
-# ---- OpenShift API server config ---------------------------------
-# Env overrides (optional):
-#   OCP_API_SCHEME     -> e.g. "https"
-#   OCP_DOMAIN         -> e.g. "7wse.p1.openshiftapps.com"
-#   OCP_API_PORT       -> e.g. "6443" (set empty or "0" to omit)
-#   OCP_SERVER_REGEX   -> full regex override with a (?<short>...) group
+# ---- OpenShift API server config (domain suffix REQUIRED) ----------------------
+# Environment variables:
+#   OCP_DOMAIN_SUFFIX  -> e.g. "corp.example.com"  (REQUIRED; no default)
+#   OCP_API_SCHEME     -> e.g. "https"             (optional; default https)
+#   OCP_API_PORT       -> e.g. "6443"              (optional; 0/empty omits port)
+#   OCP_SERVER_REGEX   -> full regex override with a (?<short>...) group (optional)
 $script:OcpServer = @{
-    Scheme      = if ($env:OCP_API_SCHEME) { $env:OCP_API_SCHEME } else { 'https' }
-    Domain      = if ($env:OCP_DOMAIN)     { $env:OCP_DOMAIN }     else { '7wse.p1.openshiftapps.com' }
-    Port        = if ($env:OCP_API_PORT)   { try { [int]$env:OCP_API_PORT } catch { 6443 } } else { 6443 }
-    ServerRegex = $env:OCP_SERVER_REGEX  # optional override; must include (?<short>...) group
+    Scheme        = if ($env:OCP_API_SCHEME) { $env:OCP_API_SCHEME } else { 'https' }
+    DomainSuffix  = $env:OCP_DOMAIN_SUFFIX     # REQUIRED: must be set by the user
+    Port          = if ($env:OCP_API_PORT)     { try { [int]$env:OCP_API_PORT } catch { 6443 } } else { 6443 }
+    ServerRegex   = $env:OCP_SERVER_REGEX
+}
+
+function Assert-OcpDomainSuffix {
+    Resolve-OcpConfigFromEnv
+    if ([string]::IsNullOrWhiteSpace($script:OcpServer.DomainSuffix)) {
+        Write-Error @"
+OCP_DOMAIN_SUFFIX is required and not set.
+Set it for this session (example):
+    `$env:OCP_DOMAIN_SUFFIX = 'corp.example.com'
+Or add it to your PowerShell profile so it’s always set.
+"@
+        throw "OCP_DOMAIN_SUFFIX is not set."
+    }
 }
 
 function Get-OcpApiServerUrl {
     param([Parameter(Mandatory)][string]$Cluster)
+    Assert-OcpDomainSuffix
     $portPart = if ($script:OcpServer.Port -gt 0) { ":$($script:OcpServer.Port)" } else { "" }
-    return "{0}://api.{1}.{2}{3}" -f $script:OcpServer.Scheme, $Cluster, $script:OcpServer.Domain, $portPart
+    return "{0}://api.{1}.{2}{3}" -f $script:OcpServer.Scheme, $Cluster, $script:OcpServer.DomainSuffix, $portPart
 }
 
 function Get-OcpServerRegex {
-    # If user supplied a full regex, prefer it (must expose (?<short>...))
+    Assert-OcpDomainSuffix
+
     if ($script:OcpServer.ServerRegex -and $script:OcpServer.ServerRegex.Trim().Length -gt 0) {
-        try {
-            return [regex]::new($script:OcpServer.ServerRegex, [Text.RegularExpressions.RegexOptions]::IgnoreCase)
-        } catch { }
+        try { return [regex]::new($script:OcpServer.ServerRegex, [Text.RegularExpressions.RegexOptions]::IgnoreCase) } catch { }
     }
-    # Default: https?://api.<short>.<domain>[:port]
-    $dom = [regex]::Escape($script:OcpServer.Domain)
+
+    $dom = [regex]::Escape($script:OcpServer.DomainSuffix)
     $pat = "^(?<scheme>https?)://api\.(?<short>[^.]+)\.$dom(?::\d+)?$"
     return [regex]::new($pat, [Text.RegularExpressions.RegexOptions]::IgnoreCase)
 }
@@ -297,6 +310,16 @@ function Ensure-OcpSessionTags {
 }
 
 # ---------------------- Helpers: current namespace & warmers ---------------------
+# Refresh script-scoped config from environment (live overrides)
+function Resolve-OcpConfigFromEnv {
+    if ($env:OCP_API_SCHEME)        { $script:OcpServer.Scheme       = $env:OCP_API_SCHEME }
+    if ($env:OCP_DOMAIN_SUFFIX)     { $script:OcpServer.DomainSuffix = $env:OCP_DOMAIN_SUFFIX }
+    if ($null -ne $env:OCP_API_PORT -and $env:OCP_API_PORT -ne '') {
+        try { $script:OcpServer.Port = [int]$env:OCP_API_PORT } catch { }
+    }
+    if ($env:OCP_SERVER_REGEX)      { $script:OcpServer.ServerRegex  = $env:OCP_SERVER_REGEX }
+}
+
 function Test-OcpLoggedIn {
     try {
         & oc whoami 1>$null 2>$null
@@ -608,6 +631,9 @@ function ocp {
 
     # Lazy init: do not run 'oc' until ocp is actually used
     Ensure-OcpSessionTags
+
+    # Require domain suffix before any ocp operation
+    try { Assert-OcpDomainSuffix } catch { return }
 
     if (-not $ArgumentList -or $ArgumentList.Count -eq 0) { Show-OcpUsage; return }
 
