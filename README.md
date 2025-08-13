@@ -90,10 +90,6 @@ Open a new PowerShell session (or re-dot-source your profile) and run `ocp`.
 
 ---
 
-Absolutely—here’s a **drop-in replacement** for the **Configuration** section with the **Required/Optional** settings presented as a table.
-
----
-
 ## Configuration
 
 Only **one** variable is required: your organization’s **domain suffix**.
